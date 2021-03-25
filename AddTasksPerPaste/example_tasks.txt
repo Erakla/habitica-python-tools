@@ -1,0 +1,25 @@
+mytitle
+a subtask
+[notes]a small description
+another subtask
+[item][#] a subtask with leading [#]
+[priority]2
+[tasktype]daily
+[frequency]daily
+[every_x]3
+
+second example task
+subtask1
+subtask2
+subtask3
+
+first line is only the title
+all following lines without [] are subtasks
+[tags] are parameters for function account.create_task_for_user()
+subtasks with leading [] can use [item] tag
+not all possible arguments are tested because i didn't need it in the past
+particularly arguments with timestamps are not implemented so far
+an empty line initiates a new quest
+two blank lines will complete the input and send the quests in reverse order. why backwards?
+because the quests are automatically always attached to the top and
+you might want to have them in the order in which you wrote them down
