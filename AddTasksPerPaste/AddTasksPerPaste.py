@@ -37,7 +37,7 @@ def terminal_create_todos():
         for arg in ['priority']:
             if arg in task:
                 task[arg] = float(task[arg])
-        for arg in ["up", "down"]:
+        for arg in ["up", "down", "collapse_check_list"]:
             if arg in task:
                 task[arg] = bool(task[arg])
         if 'tags' in task:

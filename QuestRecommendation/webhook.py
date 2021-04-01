@@ -110,6 +110,66 @@ def print_evaluation():
 
     return json.dumps(scores, indent='\t')
 
+# add usertoken #
+
+@app.route("/adduser", methods=['GET'])
+def adduserform():
+    with open('webpages/changeuserform.html', 'rt', encoding='utf8') as file:
+        return file.read().replace('<--function-->', 'add user'), 200
+
+@app.route("/adduser", methods=['POST'])
+def adduserpost():
+    with open('token.json', 'rt', encoding='utf8') as file:
+        tokenlist = json.load(file)
+
+    uuid = request.form.get('uuid', '')
+    token = request.form.get('token', '')
+    members = [member['id'] for member in acc.party.members]
+
+    if uuid not in members:
+        return f"user is not member of the party {acc.party['summary']}", 406
+    if uuid in tokenlist:
+        return "user already registrated", 406
+
+    try:
+        username = client.connect(uuid, token).profile['profile']['name']
+        tokenlist[uuid] = token
+        with open('token.json', 'wt', encoding='utf8') as file:
+            json.dump(tokenlist, file, indent='\t')
+        acc.user_send_private_message("#QuestRecommendation\n"
+                                      "user added\n"
+                                      "you can remove yourself at:\n"
+                                      "http://eratech.ch:1082/deluser\n", uuid)
+        return f"{username} successfully added", 201
+    except NotAuthorized as ex:
+        return str(ex), 401
+
+@app.route("/deluser", methods=['GET'])
+def deluserform():
+    with open('webpages/changeuserform.html', 'rt', encoding='utf8') as file:
+        return file.read().replace('<--function-->', 'delete user'), 200
+
+@app.route("/deluser", methods=['POST'])
+def deluserpost():
+    with open('token.json', 'rt', encoding='utf8') as file:
+        tokenlist: dict = json.load(file)
+
+    uuid = request.form.get('uuid', '')
+    token = request.form.get('token', '')
+
+    if uuid not in tokenlist:
+        return "user not registered", 404
+    if token != tokenlist[uuid]:
+        return "wrong token", 401
+
+    del tokenlist[uuid]
+    with open('token.json', 'wt', encoding='utf8') as file:
+        json.dump(tokenlist, file)
+    acc.user_send_private_message("#QuestRecommendation\n"
+                                  "user removed: self ordered\n"
+                                  "you can register again at:\n"
+                                  "http://eratech.ch:1082/adduser\n", uuid)
+    return "user successfully deleted", 200
 
 # quest recommendation #
 
@@ -125,9 +185,12 @@ def determine_best_equip_for_main_stat(main_stats, con_gear, members):
                 best_items[con_gear[key]['type']] = (key, con_gear[key][stat])
         members[member['id']] = {'bestitems': best_items, 'name': member['profile']['name']}
 
-def enumerate_owned_party_quests(party_quests):
+def enumerate_owned_party_quests(party_quests, token: dict):
     with open("considered_quest_owner.json", "rt", encoding="utf8") as file:
         owner = json.load(file)
+    for id in token:
+        if id not in owner:
+            owner.append(id)
 
     # erstelle eine liste aller in der party besessenen quests und ihrer besitzer
     for member in acc.ProfileList(owner):
@@ -248,13 +311,15 @@ def recommend_next_quest():
     # I would primarily go for higher items for main attributes of the respective class (that will rarely be the case)
     # secondly to achivement. So how many people have not yet completed a quest.
 
+    with open('token.json', 'rt', encoding='utf8') as file:
+        token = json.load(file)
     main_stats = {'warrior': 'str', 'rogue': 'per', 'wizard': 'int', 'healer': 'con'}
     con_gear = acc.objects['gear']['flat']
     members = {}
     party_quests = {}
 
     determine_best_equip_for_main_stat(main_stats, con_gear, members)
-    enumerate_owned_party_quests(party_quests)
+    enumerate_owned_party_quests(party_quests, token)
     determine_quest_item_stats(party_quests, con_gear)
     determine_quest_advantages(party_quests, main_stats, members)
     # wenn user vorteile haben, bestimme die summe an boni pro quest
@@ -270,12 +335,24 @@ def recommend_next_quest():
     acc.party.chat.send_message(out, False)
 
     for quest in best_quests:
-        if acc.user_id in party_quests[quest]['owner']:
-            log(f"invite to quest: {acc.objects['quests'][quest]['text']}")
-            acc.quest_invite_group('party', quest, False)
-            break
+        for id in token:
+            if id in party_quests[quest]['owner']:
+                log(f"invite with {acc.get_profile_by_id(id)['profile']['name']} to quest: {acc.objects['quests'][quest]['text']}")
+                client.connect(id, token[id]).quest_invite_group('party', quest, False)
+                return
 
 # webhook functions #
+
+def on_wrong_userdata(id):
+    with open('token.json', 'rt', encoding='utf8') as file:
+        tokenlist = json.load(file)
+    del tokenlist[id]
+    with open('token.json', 'wt', encoding='utf8') as file:
+        json.dump(tokenlist, file)
+    acc.user_send_private_message("#QuestRecommendation\n"
+                                  "user removed: invalid token\n"
+                                  "you can register again with a valid token at:\n"
+                                  "http://eratech.ch:1082/adduser\n", id)
 
 def log(msg: str):
     print(f"{9*'- '}{time.strftime('[%d/%b/%Y %H:%M:%S]')} {msg}")
@@ -283,7 +360,13 @@ def log(msg: str):
 def quest_invited():
     log("quest invited")
     log("accept pending quest")
-    acc.quest_accept_pending('party')
+    leader = acc.party['quest']['leader']
+    with open('token.json', 'rt', encoding='utf8') as file:
+        token = json.load(file)
+
+    for id in token:
+        if id != leader:
+            client.connect(id, token[id]).quest_accept_pending('party', False)
 
     with RegistrationEvaluator(72) as eva:
         tick_duration = 60 * 15
