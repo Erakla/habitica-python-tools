@@ -136,10 +136,6 @@ def adduserpost():
         tokenlist[uuid] = token
         with open('token.json', 'wt', encoding='utf8') as file:
             json.dump(tokenlist, file, indent='\t')
-        acc.user_send_private_message("#QuestRecommendation\n"
-                                      "user added\n"
-                                      "you can remove yourself at:\n"
-                                      "http://eratech.ch:1082/deluser\n", uuid)
         return f"{username} successfully added", 201
     except NotAuthorized as ex:
         return str(ex), 401
@@ -165,10 +161,6 @@ def deluserpost():
     del tokenlist[uuid]
     with open('token.json', 'wt', encoding='utf8') as file:
         json.dump(tokenlist, file)
-    acc.user_send_private_message("#QuestRecommendation\n"
-                                  "user removed: self ordered\n"
-                                  "you can register again at:\n"
-                                  "http://eratech.ch:1082/adduser\n", uuid)
     return "user successfully deleted", 200
 
 # quest recommendation #
@@ -335,24 +327,27 @@ def recommend_next_quest():
     acc.party.chat.send_message(out, False)
 
     for quest in best_quests:
-        for id in token:
-            if id in party_quests[quest]['owner']:
-                log(f"invite with {acc.get_profile_by_id(id)['profile']['name']} to quest: {acc.objects['quests'][quest]['text']}")
-                client.connect(id, token[id]).quest_invite_group('party', quest, False)
-                return
+        for uid in token:
+            try:
+                if uid in party_quests[quest]['owner']:
+                    log(f"invite with {acc.get_profile_by_id(uid)['profile']['name']} to quest: {acc.objects['quests'][quest]['text']}")
+                    client.connect(uid, token[uid]).quest_invite_group('party', quest, False)
+                    return
+            except NotAuthorized:
+                wrong_userdata_handler(uid)
 
 # webhook functions #
 
-def on_wrong_userdata(id):
+def wrong_userdata_handler(uid):
     with open('token.json', 'rt', encoding='utf8') as file:
         tokenlist = json.load(file)
-    del tokenlist[id]
+    del tokenlist[uid]
     with open('token.json', 'wt', encoding='utf8') as file:
         json.dump(tokenlist, file)
-    acc.user_send_private_message("#QuestRecommendation\n"
+    acc.user_send_private_message("## QuestRecommendation\n"
                                   "user removed: invalid token\n"
                                   "you can register again with a valid token at:\n"
-                                  "http://eratech.ch:1082/adduser\n", id)
+                                  "http://eratech.ch:1082/adduser\n", uid)
 
 def log(msg: str):
     print(f"{9*'- '}{time.strftime('[%d/%b/%Y %H:%M:%S]')} {msg}")
