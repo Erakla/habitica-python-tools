@@ -1,3 +1,4 @@
+import flask
 from HabiticaAPI import Client
 from HabiticaAPI.Exceptions import *
 import json
@@ -7,6 +8,7 @@ from threading import Thread
 import requests
 import time
 import os
+import copy
 
 app = Flask(__name__)
 
@@ -15,73 +17,83 @@ app = Flask(__name__)
 class RegistrationEvaluator:
     def __init__(self, max_ticks):
         self._max_ticks = max_ticks
+        row_member_entry = {'quests': 0, 'missed ticks': [0 for i in range(max_ticks)]}
         if os.path.exists('QuestAcceptScore.json'):
             with open('QuestAcceptScore.json', 'rt', encoding='utf8') as file:
                 self._scores = json.load(file)
         else:
-            self._scores = {member: {'quests': 0, 'missed ticks': [0 for i in range(max_ticks)]}
-                            for member in acc.party['quest']['members'].keys()}
-        self._current_tick = 0
-
+            self._scores = {member: copy.deepcopy(row_member_entry) for member in acc.party['quest']['members']}
         length_difference = max_ticks - len(list(self._scores.values())[0]['missed ticks'])
         if length_difference:
             for member in self._scores:
                 self._scores[member]['missed ticks'] += [0 for i in range(length_difference)]
 
-    def __enter__(self):
+        for member in acc.party.members.ids:
+            if member not in self._scores:
+                self._scores[member] = copy.deepcopy(row_member_entry)
+
         for member in self._scores:
             self._scores[member]['quests'] += 1
+        self._current_tick = -1
+
+    def __enter__(self):
         return self
 
-    def tick(self):
-        states = acc.party['quest']['members']
-
-        # prepare list lengths
-        for member in self._scores:
-            if len(self._scores[member]['missed ticks']) < self._current_tick+1:
-                self._scores[member]['missed ticks'].append(0)
-                self._scores[member]['missed ticks'].append(0)
-
-        # raise missed counters
-        for member in self._scores:
-            if not states.get(member, False):
-                self._scores[member]['missed ticks'][self._current_tick] += 1
-
-        self._current_tick += 1
-        return not self._current_tick < self._max_ticks
-
-    def evaluate(self, limit: float = 0.5, exceptionlimit: float = 0.1, least: float = 0.5):
-        """
-        calculates the average chance of all players that no one will participate until the next tick.
-        participating until the next tick. returns true if limit is exceeded. use it as termination condition.
-
-        :param limit:           highest accepted chance that nobody registers anymore. exceeding it results in a return of true
-        :param exceptionlimit:  returns false, if a single player falls below this limit
-        :param least:           smallest number of players to take part before the waiting period can be canceled
-        """
-        if self._current_tick > self._max_ticks:
-            return False
-        if acc.party['quest']['active']:
-            return False
-
-        chancen = 1
-        states = acc.party['quest']['members']
-        not_attended = [member for member in self._scores if not states[member]]
-        if not_attended > len(states)*least:
-            return True
-        for member in not_attended:
-            chance = self._scores[member]['missed ticks'][self._current_tick] / self._scores[member]['quests']
-            if chance < exceptionlimit:
-                return True
-            chancen *= chance
-        return chancen < limit
-
     def __exit__(self, exc_type, exc_val, exc_tb):
+        for member in self._scores:
+            missed_ticks = self._scores[member]['missed ticks']
+            # calculate average ticks
+            differences = [missed_ticks[i] - missed_ticks[i + 1] for i in range(0, max_ticks - 1)]
+            average = 0
+            for i in [differences[i] * (i + 1) for i in range(0, max_ticks - 1)]:
+                average += i
+            attended_quests = self._scores[member]['quests'] - missed_ticks[-1]
+            if attended_quests:
+                average /= attended_quests
+            self._scores[member]['average ticks taken'] = average
+
+            abs_attendance = 1 - self._scores[member]['missed ticks'][-1] / (self._scores[member]['quests'])
+            if self._scores[member]['average ticks taken']:
+                probability_for_one_tick = 1 / self._scores[member]['average ticks taken'] * abs_attendance
+            else:
+                probability_for_one_tick = abs_attendance
+            self._scores[member]['prop not attend per tick'] = 1 - probability_for_one_tick
+
         with open('QuestAcceptScore.json', 'wt', encoding='utf8') as file:
             json.dump(self._scores, file, indent=' ')
 
+    def run_tick(self, limit: float = 0.5, least: float = 0.5):
+        """
+        calculates the average chance of all players that no one will participate until the next tick.
+        returns true if limit is exceeded. use it as termination condition in for loop.
 
-@app.route("/webhook", methods=['GET'])
+        :param limit:  highest accepted chance that nobody registers anymore. exceeding it results in a return of false
+        :param least:  smallest number of players to take part before the waiting period can be canceled
+        """
+        if acc.party['quest']['active']:
+            return False
+        if not self._current_tick < 0:
+            # raise missed counters
+            states = acc.party['quest']['members']
+            for member in self._scores:
+                if not states.get(member, True):
+                    self._scores[member]['missed ticks'][self._current_tick] += 1
+        self._current_tick += 1
+        if self._current_tick >= self._max_ticks:
+            return False
+
+        # accumulate chances for attendation until the next tick
+        chancen = 1
+        states = acc.party['quest']['members']
+        not_attended = [member for member in self._scores if not states[member]]
+        if len(states)*least < len(not_attended):
+            return True
+        for member in not_attended:
+            chancen *= self._scores[member].get('prop not attend per tick', 0.5)
+        return chancen <= limit
+
+
+@app.route("/report", methods=['GET'])
 def print_evaluation():
     """
     returns a json formated evaluation containing average passes per tick.
@@ -94,21 +106,47 @@ def print_evaluation():
     else:
         return "no data available"
 
-    ticks = len(list(scores.values())[0]['missed ticks'])
-    for member in scores:
-        missed_ticks = scores[member]['missed ticks']
-        scores[member]['not attended'] = str([missed_ticks[i]/scores[member]['quests'] for i in range(ticks)])
+    # remove not existing players
+    allmembers = acc.party.members.ids
+    cscores = scores.copy()
+    for member in cscores:
+        if member not in allmembers:
+            del scores[member]
+
+    with open('QuestAcceptScore.json', 'wt', encoding='utf8') as file:
+        json.dump(scores, file)
+
+
+    ticks = len(list(cscores.values())[0]['missed ticks'])
+    for member in cscores:
+        missed_ticks = cscores[member]['missed ticks']
         # calculate average ticks
         differences = [missed_ticks[i] - missed_ticks[i+1] for i in range(0, ticks-1)]
         average = 0
-        for i in [differences[i] * (i+1) for i in range(0, ticks)]:
+        for i in [differences[i] * (i+1) for i in range(0, ticks-1)]:
             average += i
-        average /= scores[member]['quests'] - missed_ticks[-1]
-        scores[member]['average ticks taken'] = average
-        scores[member]['profile name'] = acc.get_profile_by_id(member)['profile']['name']
-        scores[member]['missed ticks'] = str(scores[member]['missed ticks'])
+        attended_quests = cscores[member]['quests'] - missed_ticks[-1]
+        if attended_quests:
+            average /= attended_quests
+        cscores[member]['average ticks taken'] = average
+        cscores[member]['profile name'] = acc.get_profile_by_id(member)['profile']['name']
 
-    return json.dumps(scores, indent='\t')
+    out = f'tick duration: {"%5.1f" % (tick_duration/60)} min' \
+          '<tr><th>profile name</th><th>participation</th><th>average ticks taken</th><th>attend per tick probability</th></tr>'
+    for member in cscores:
+        abs_quests = cscores[member]["quests"]
+        missed = cscores[member]["missed ticks"][-1]
+        out += f'<tr><td class="left">{cscores[member]["profile name"]}</td>' \
+               f'<td>{abs_quests - missed}/{abs_quests}</td>' \
+               f'<td>{"%4.1f" % cscores[member]["average ticks taken"]}</td>' \
+               f'<td>{1-cscores[member]["prop not attend per tick"]}</td></tr>'
+
+    return "<!DOCTYPE html><head><style>" \
+           "td {text-align: center;font-family:'Courier New';}" \
+           "td.left {text-align: left;}" \
+           "table, th, td {border:1px solid black;border-collapse:collapse}" \
+           "</style></head>" \
+           f"<body><table>{out}</table></body>"
 
 # add usertoken #
 
@@ -168,7 +206,7 @@ def deluserpost():
 def determine_best_equip_for_main_stat(main_stats, con_gear, members):
     # wer bekäme höhere ausrüstung?
     # bestimme für jedes mitglied die beste ausrüstung für ihr hauptattribut
-    for member in acc.party.member:
+    for member in acc.party.members:
         stat = main_stats[member['stats']['class']]
         own_gear = member['items']['gear']['owned']
         best_items = {}
@@ -213,7 +251,7 @@ def determine_quest_advantages(party_quests, main_stats, members):
     for quest in party_quests:
         party_quests[quest]['stat_advantage'] = []
         party_quests[quest]['achievements'] = []
-        for member in acc.party.member:
+        for member in acc.party.members:
             stat = main_stats[member['stats']['class']]
             quest_item_stat = party_quests[quest]['stats'].get(stat, (0, ''))
             if quest_item_stat[1] == stat:
@@ -254,7 +292,7 @@ def determine_best_achievement_quests(party_quests):
 
 def determine_quest_owners(party_quests):
     # bestimme, welche user diese quest besitzen
-    for member in acc.party.member:
+    for member in acc.party.members:
         for quest in party_quests:
             if member['items']['quests'].get(quest, 0) > 0:
                 party_quests[quest]['owner'].append(member['id'])
@@ -355,23 +393,29 @@ def log(msg: str):
 def quest_invited():
     log("quest invited")
     log("accept pending quest")
-    leader = acc.party['quest']['leader']
     with open('token.json', 'rt', encoding='utf8') as file:
         token = json.load(file)
 
-    for id in token:
-        if id != leader:
-            client.connect(id, token[id]).quest_accept_pending('party', False)
+    unattended = [uid for uid in acc.party['quest']['members'] if not acc.party['quest']['members'][uid]]
+    for uid in token:
+        if uid not in unattended:
+            continue
+        try:
+            client.connect(uid, token[uid]).quest_accept_pending('party', False)
+        except ArgumentsNotAccepted:
+            pass
+        except NotAuthorized:
+            wrong_userdata_handler(uid)
 
-    with RegistrationEvaluator(72) as eva:
-        tick_duration = 60 * 15
-        while eva.evaluate():
+    with RegistrationEvaluator(max_ticks) as eva:
+        while eva.run_tick():
             time.sleep(tick_duration)
-            if eva.tick():
-                break
 
-    if not acc.party['quest']['active'] and acc.party['quest']['leader'] == acc.user_id:
-        acc.quest_force_start_pending_quest(acc.party['id'])
+    if not acc.party['quest']['active']:
+        if acc.party['quest']['leader'] == acc.user_id:
+            acc.quest_force_start_pending_quest(acc.party['id'])
+        else:
+            acc.party.chat.send_message("I think we should start the quest")
 
 def quest_started():
     log("quest started")
@@ -388,7 +432,7 @@ def quest_finished():
 
 def process(logdata: json):
     # log
-    filename = "log/%s.json" % time.strftime("%Y-%m-%d")
+    filename = "log/requests_in/%s.json" % time.strftime("%Y-%m-%d")
 
     if os.path.exists(filename):
         with open(filename, "rt") as file:
@@ -409,6 +453,10 @@ def process(logdata: json):
         if data['type'] == 'questFinished':
             Thread(target=quest_finished).start()
 
+@app.route("/favicon.ico", methods=['GET'])
+def favicon():
+    return flask.send_from_directory('static', 'favicon.ico')
+
 @app.route("/webhook", methods=['POST'])
 def webhook():
     data = request.json
@@ -427,11 +475,14 @@ def webhook():
 
 
 if __name__ == '__main__':
+    max_ticks = 36
+    tick_duration = 60*30
+
     with open('AppData.json', 'rt', encoding='utf8') as file:
         appdata = json.load(file)
 
     try:
-        with Client(appdata['author_uid'], appdata['application_name'], 30, language='en') as client:
+        with Client(appdata['author_uid'], appdata['application_name'], 30, language='en', logfolder='log/requests_out') as client:
             acc = client.connect(appdata['user_id'], appdata['token'])
             app.run(host='0.0.0.0', port=1082)
 
