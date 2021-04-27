@@ -462,8 +462,8 @@ def webhook():
 
 
 if __name__ == '__main__':
-    max_ticks = 3  # 44
-    tick_duration = 0  # 60*30
+    max_ticks = 44
+    tick_duration = 60*30
     remaining_ticks = 0
 
     with open('AppData.json', 'rt', encoding='utf8') as file:
@@ -472,7 +472,7 @@ if __name__ == '__main__':
     try:
         with Client(appdata['author_uid'], appdata['application_name'], 30, cached_duration=5, language='en', logfolder='log/requests_out') as client:
             acc = client.connect(appdata['user_id'], appdata['token'])
-            app.run(host='0.0.0.0', port=80)
+            app.run(host='0.0.0.0', port=1082)
 
     except NotAuthorized as ex:
         log(str(ex))
