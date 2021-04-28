@@ -18,12 +18,13 @@ app = Flask(__name__)
 # registration evaluation #
 
 class JSONFileData:
-    def __init__(self, path, encoding='utf8', type_=dict, **dumpargs):
+    def __init__(self, path, encoding='utf8', default=None, readonly=False, **dumpargs):
         self.path = path
         self.encoding = encoding
         self.data = None
-        self.type = type_
+        self.default = default
         self.dumpargs = dumpargs
+        self.readonly = readonly
 
     def __enter__(self):
         import os
@@ -31,10 +32,12 @@ class JSONFileData:
             with open(self.path, 'rt', encoding=self.encoding) as file:
                 self.data = json.load(file)
         else:
-            self.data = self.type()
+            self.data = self.default or {}
         return self.data
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.readonly:
+            return
         with open(self.path, 'wt', encoding=self.encoding) as file:
             json.dump(self.data, file, **self.dumpargs)
 
@@ -42,7 +45,7 @@ class JSONFileData:
 class RegistrationEvaluator:
     def __init__(self):
         global remaining_ticks
-        remaining_ticks = max_ticks
+        remaining_ticks = settings['max_ticks']
         row_member_entry = {'quests': 0, 'ticks': 0, 'participations': 0, 'average_ticks_taken': 0, 'not_attend_prob': 0.5}
 
         with JSONFileData('QuestAcceptScore.json', indent=' ') as scores:
@@ -71,8 +74,9 @@ class RegistrationEvaluator:
                 if states.get(uid, False):
                     scores[uid]['participations'] += 1
                 else:
-                    if remaining_ticks != max_ticks:
-                        scores[uid]['ticks'] += 1
+                    with JSONFileData('webhooksettings.json', readonly=True) as settings_:
+                        if remaining_ticks != settings_['max_ticks']:
+                            scores[uid]['ticks'] += 1
                 if scores[uid]['participations']:
                     scores[uid]['average_ticks_taken'] = scores[uid]['ticks'] / scores[uid]['participations']
                 else:
@@ -118,24 +122,39 @@ def print_evaluation():
     for uid in scores:
         scores[uid]['profile_name'] = acc.get_profile_by_id(uid)['profile']['name']
 
-    remaining = remaining_ticks*tick_duration/60
-    out = f'tick duration: %d min, max ticks: %d' % (tick_duration//60, max_ticks)
+    with JSONFileData('webhooksettings.json', readonly=True) as settings_:
+        pass
+
+    # headline
+    remaining = remaining_ticks*settings_['tick_duration']/60
+    headline = ''
     if remaining_ticks:
-        out += ', start forced in {%d} ticks (%02d:%02d)' % (remaining_ticks, remaining//60, int(remaining % 60))
-    out += '<tr><th>profile name</th><th>participation</th><th>average ticks taken</th><th>attend per tick probability</th></tr>'
+        headline += 'start forced in {%d} ticks (< %02d:%02d)' % (remaining_ticks, remaining//60, int(remaining % 60))
+
+    # scoring table
+    table_scores = '<tr><th>profile name</th><th>participation</th><th>average ticks taken</th><th>attend per tick probability</th></tr>'
     for uid in scores:
         m = scores[uid]
-        out += f'<tr><td class="left">{m["profile_name"]}</td>' \
+        table_scores += f'<tr><td class="left">{m["profile_name"]}</td>' \
                f'<td>{m["participations"]}/{m["quests"]}</td>' \
                f'<td>{"%4.1f" % m["average_ticks_taken"]}</td>' \
                f'<td>{"%3d" % int((1-m["not_attend_prob"])*100)}%</td></tr>'
+    table_scores = f"<table>{table_scores}</table><br>"
 
+    # settings table
+    duration = settings_['max_ticks'] * settings_['tick_duration'] // 60
+    table_settings = '<tr><th>setting</th><th>value</th></tr>' \
+                     f'<tr><td class="left">tick duration</td><td>{settings_["tick_duration"]//60} min</td></tr>' \
+                     f'<tr><td class="left">max ticks</td><td>{settings_["max_ticks"]} ({"%02d:%02d" % (duration//60, duration % 60)})</td></tr>'
+    table_settings = f"<table>{table_settings}</table>"
+
+    # document
     return "<!DOCTYPE html><head><style>" \
            "td {text-align: center;font-family:'Courier New';}" \
            "td.left {text-align: left;}" \
            "table, th, td {border:1px solid black;border-collapse:collapse}" \
            "</style></head>" \
-           f"<body><table>{out}</table></body>"
+           f"<body>{headline}{table_scores}{table_settings}</body>"
 
 # add usertoken #
 
@@ -397,8 +416,9 @@ def quest_invited():
             wrong_userdata_handler(uid)
 
     eva = RegistrationEvaluator()
-    while eva.run_tick():
-        time.sleep(tick_duration)
+    with JSONFileData('webhooksettings.json', readonly=True) as settings_:
+        while eva.run_tick():
+            time.sleep(settings_['tick_duration'])
 
     if not acc.party['quest']['active']:
         if acc.party['quest']['leader'] == acc.user_id:
@@ -469,8 +489,9 @@ def webhook():
 
 
 if __name__ == '__main__':
-    max_ticks = 44
-    tick_duration = 60*30
+    default_settings = {'max_ticks': 44, 'tick_duration': 60 * 30}
+    with JSONFileData('webhooksettings.json', indent=' ', default=default_settings) as settings:
+        pass
     remaining_ticks = 0
 
     with open('AppData.json', 'rt', encoding='utf8') as file:
