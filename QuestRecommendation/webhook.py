@@ -1,5 +1,6 @@
 import encodings.utf_8
 
+import HabiticaAPI.tools
 import flask
 from HabiticaAPI import Client
 from HabiticaAPI.Exceptions import *
@@ -408,14 +409,14 @@ def quest_invited():
 
 def quest_started():
     log("quest started")
-    log("cast spell tools of trade")
     if 'collect' in acc.objects['quests'][acc.party['quest']['key']]:
+        log("cast spell tools of trade")
+        HabiticaAPI.tools.equip_for_stat(acc, 'per')
         while not acc.profile['stats']['mp'] < acc.objects['spells']['rogue']['toolsOfTrade']['mana']:
             requests.post('https://habitica.com/api/v3/user/class/cast/toolsOfTrade', headers=acc.send.header)
             acc.profile['stats']['mp'] -= acc.objects['spells']['rogue']['toolsOfTrade']['mana']
+        HabiticaAPI.tools.equip_for_stat(acc, 'con')
     time.sleep(5)
-    log("run cron")
-    acc.cron_run()
 
 def quest_finished():
     log("quest finished")
