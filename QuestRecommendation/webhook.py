@@ -18,11 +18,12 @@ app = Flask(__name__)
 # registration evaluation #
 
 class JSONFileData:
-    def __init__(self, path, encoding='utf8', type_=dict):
+    def __init__(self, path, encoding='utf8', type_=dict, **dumpargs):
         self.path = path
         self.encoding = encoding
         self.data = None
         self.type = type_
+        self.dumpargs = dumpargs
 
     def __enter__(self):
         import os
@@ -35,7 +36,7 @@ class JSONFileData:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         with open(self.path, 'wt', encoding=self.encoding) as file:
-            json.dump(self.data, file, indent=' ')
+            json.dump(self.data, file, **self.dumpargs)
 
 
 class RegistrationEvaluator:
@@ -44,7 +45,7 @@ class RegistrationEvaluator:
         remaining_ticks = max_ticks
         row_member_entry = {'quests': 0, 'ticks': 0, 'participations': 0, 'average_ticks_taken': 0, 'not_attend_prob': 0.5}
 
-        with JSONFileData('QuestAcceptScore.json') as scores:
+        with JSONFileData('QuestAcceptScore.json', indent=' ') as scores:
             for uid in acc.party.members.ids:
                 if uid not in scores:
                     scores[uid] = copy.deepcopy(row_member_entry)
@@ -63,7 +64,7 @@ class RegistrationEvaluator:
         :param least:  smallest number of players to take part before the waiting period can be canceled
         """
         global remaining_ticks
-        with JSONFileData('QuestAcceptScore.json') as scores:
+        with JSONFileData('QuestAcceptScore.json', indent=' ') as scores:
             # raise missed counters
             states = acc.party['quest']['members']
             for uid in self.last_not_attended:
@@ -107,13 +108,12 @@ def print_evaluation():
     calculates the average ticks each player takes to attend.
     :return: json formated evaluation string
     """
-    with JSONFileData('QuestAcceptScore.json') as fscores:
+    with JSONFileData('QuestAcceptScore.json', indent=' ') as scores:
         # remove not existing players
         allmembers = acc.party.members.ids
-        for uid in fscores.copy():
+        for uid in scores.copy():
             if uid not in allmembers:
-                del fscores[uid]
-        scores = fscores
+                del scores[uid]
 
     for uid in scores:
         scores[uid]['profile_name'] = acc.get_profile_by_id(uid)['profile']['name']
