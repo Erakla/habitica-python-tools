@@ -71,7 +71,10 @@ class RegistrationEvaluator:
                 else:
                     if remaining_ticks != max_ticks:
                         scores[uid]['ticks'] += 1
-                        scores[uid]['average_ticks_taken'] = scores[uid]['ticks'] / scores[uid]['participations']
+                        if scores[uid]['average_ticks_taken']:
+                            scores[uid]['average_ticks_taken'] = scores[uid]['ticks'] / scores[uid]['participations']
+                        else:
+                            scores[uid]['average_ticks_taken'] = 1
                         scores[uid]['not_attend_prob'] = 1 - (1 / (scores[uid]['average_ticks_taken'] + 1))
 
             if acc.party['quest']['active']:
