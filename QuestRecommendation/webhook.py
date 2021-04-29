@@ -45,7 +45,7 @@ class JSONFileData:
 class RegistrationEvaluator:
     def __init__(self):
         global remaining_ticks
-        remaining_ticks = settings['max_ticks']
+        remaining_ticks = settings['max ticks']
         row_member_entry = {'quests': 0, 'ticks': 0, 'participations': 0, 'average_ticks_taken': 0, 'not_attend_prob': 0.5}
 
         with JSONFileData('QuestAcceptScore.json', indent=' ') as scores:
@@ -58,7 +58,7 @@ class RegistrationEvaluator:
 
         self.last_not_attended = acc.party.members.ids
 
-    def run_tick(self, limit: float = 0.6, least: float = 0.5):
+    def run_tick(self):
         """
         calculates the average chance of all players that no one will participate until the next tick.
         returns true if limit is exceeded. use it as termination condition in for loop.
@@ -67,6 +67,8 @@ class RegistrationEvaluator:
         :param least:  smallest number of players to take part before the waiting period can be canceled
         """
         global remaining_ticks
+        with open('webhooksettings.json') as file:
+            settings_ = json.load(file)
         with JSONFileData('QuestAcceptScore.json', indent=' ') as scores:
             # raise missed counters
             states = acc.party['quest']['members']
@@ -74,9 +76,8 @@ class RegistrationEvaluator:
                 if states.get(uid, False):
                     scores[uid]['participations'] += 1
                 else:
-                    with JSONFileData('webhooksettings.json', readonly=True) as settings_:
-                        if remaining_ticks != settings_['max_ticks']:
-                            scores[uid]['ticks'] += 1
+                    if remaining_ticks != settings_['max ticks']:
+                        scores[uid]['ticks'] += 1
                 if scores[uid]['participations']:
                     scores[uid]['average_ticks_taken'] = scores[uid]['ticks'] / scores[uid]['participations']
                 else:
@@ -98,11 +99,11 @@ class RegistrationEvaluator:
             # accumulate chances for attendation until the next tick
             chances = 1
             not_attended = [member for member in scores if not states[member]]
-            if len(states)*least < len(not_attended):
+            if len(states)*settings_['lower attendency limit'] < len(not_attended):
                 return True
             for member in not_attended:
                 chances *= scores[member].get('prop not attend per tick', 0.5)
-            return chances <= limit
+            return chances <= settings_['upper absence probability limit']
 
 
 @app.route("/report", methods=['GET'])
@@ -126,7 +127,7 @@ def print_evaluation():
         pass
 
     # headline
-    remaining = remaining_ticks*settings_['tick_duration']/60
+    remaining = remaining_ticks*settings_['tick duration']/60
     headline = ''
     if remaining_ticks:
         headline += 'start forced in {%d} ticks (< %02d:%02d)' % (remaining_ticks, remaining//60, int(remaining % 60))
@@ -142,11 +143,12 @@ def print_evaluation():
     table_scores = f"<table>{table_scores}</table><br>"
 
     # settings table
-    duration = settings_['max_ticks'] * settings_['tick_duration'] // 60
-    table_settings = '<tr><th>setting</th><th>value</th></tr>' \
-                     f'<tr><td class="left">tick duration</td><td>{settings_["tick_duration"]//60} min</td></tr>' \
-                     f'<tr><td class="left">max ticks</td><td>{settings_["max_ticks"]} ({"%02d:%02d" % (duration//60, duration % 60)})</td></tr>'
-    table_settings = f"<table>{table_settings}</table>"
+    duration = settings_['max ticks'] * settings_['tick duration'] // 60
+    table_settings = f"<table><tr><th>setting</th><th>value</th></tr></table>" \
+                     f'<tr><td class="left">tick duration</td><td>{settings_["tick duration"]//60} min</td></tr>' \
+                     f'<tr><td class="left">max ticks</td><td>{settings_["max ticks"]} ({"%02d:%02d" % (duration//60, duration % 60)})</td></tr>' \
+                     f'<tr><td class="left">upper absence probability limit</td><td>{settings_["upper absence probability limit"]*100}%</td></tr>' \
+                     f'<tr><td class="left">lower attendency limit</td><td>{settings_["lower attendency limit"]*100}%</td></tr>'
 
     # document
     return "<!DOCTYPE html><head><style>" \
@@ -418,7 +420,7 @@ def quest_invited():
     eva = RegistrationEvaluator()
     with JSONFileData('webhooksettings.json', readonly=True) as settings_:
         while eva.run_tick():
-            time.sleep(settings_['tick_duration'])
+            time.sleep(settings_['tick duration'])
 
     if not acc.party['quest']['active']:
         if acc.party['quest']['leader'] == acc.user_id:
@@ -436,7 +438,6 @@ def quest_started():
             requests.post('https://habitica.com/api/v3/user/class/cast/toolsOfTrade', headers=acc.send.header)
             acc.profile['stats']['mp'] -= acc.objects['spells']['rogue']['toolsOfTrade']['mana']
         HabiticaAPI.tools.equip_for_stat(acc, 'con')
-    time.sleep(5)
 
 def quest_finished():
     log("quest finished")
@@ -489,7 +490,7 @@ def webhook():
 
 
 if __name__ == '__main__':
-    default_settings = {'max_ticks': 44, 'tick_duration': 60 * 30}
+    default_settings = {'max ticks': 44, 'tick duration': 60 * 30, 'upper absence probability limit': 0.6, 'lower attendency limit': 0.5}
     with JSONFileData('webhooksettings.json', indent=' ', default=default_settings) as settings:
         pass
     remaining_ticks = 0
