@@ -72,6 +72,12 @@ class RegistrationEvaluator:
         with JSONFileData('QuestAcceptScore.json', indent=' ') as scores:
             # raise missed counters
             states = acc.party['quest']['members']
+
+            # remove users without membership
+            for uid in scores.copy():
+                if uid not in states:
+                    del scores[uid]
+
             for uid in self.last_not_attended:
                 if states.get(uid, False):
                     scores[uid]['participations'] += 1
@@ -90,7 +96,7 @@ class RegistrationEvaluator:
             if acc.party['quest']['active']:
                 return False
 
-            self.last_not_attended = [uid for uid in states if not states['uid']]
+            self.last_not_attended = [uid for uid in states if not states[uid]]
 
             if not remaining_ticks:
                 return False
@@ -130,7 +136,7 @@ def print_evaluation():
     remaining = remaining_ticks*settings_['tick duration']/60
     headline = ''
     if remaining_ticks:
-        headline += 'start forced in {%d} ticks (< %02d:%02d)' % (remaining_ticks, remaining//60, int(remaining % 60))
+        headline += 'start forced in %d ticks (< %02d:%02d)' % (remaining_ticks, remaining//60, int(remaining % 60))
 
     # scoring table
     table_scores = '<tr><th>profile name</th><th>participation</th><th>average ticks taken</th><th>attend per tick probability</th></tr>'
@@ -144,11 +150,11 @@ def print_evaluation():
 
     # settings table
     duration = settings_['max ticks'] * settings_['tick duration'] // 60
-    table_settings = f"<table><tr><th>setting</th><th>value</th></tr></table>" \
-                     f'<tr><td class="left">tick duration</td><td>{settings_["tick duration"]//60} min</td></tr>' \
+    table_settings = f'<tr><td class="left">tick duration</td><td>{settings_["tick duration"]//60} min</td></tr>' \
                      f'<tr><td class="left">max ticks</td><td>{settings_["max ticks"]} ({"%02d:%02d" % (duration//60, duration % 60)})</td></tr>' \
-                     f'<tr><td class="left">upper absence probability limit</td><td>{settings_["upper absence probability limit"]*100}%</td></tr>' \
-                     f'<tr><td class="left">lower attendency limit</td><td>{settings_["lower attendency limit"]*100}%</td></tr>'
+                     f'<tr><td class="left">upper absence probability limit</td><td>{int(settings_["upper absence probability limit"]*100)}%</td></tr>' \
+                     f'<tr><td class="left">lower attendency limit</td><td>{int(settings_["lower attendency limit"]*100)}%</td></tr>'
+    table_settings = f"<table><tr><th>setting</th><th>value</th></tr>{table_settings}</table>"
 
     # document
     return "<!DOCTYPE html><head><style>" \
@@ -380,7 +386,7 @@ def recommend_next_quest():
                 if uid in party_quests[quest]['owner']:
                     log(f"invite with {acc.get_profile_by_id(uid)['profile']['name']} to quest: {acc.objects['quests'][quest]['text']}")
                     client.connect(uid, token[uid]).quest_invite_group('party', quest, False)
-                    return
+                    quest_invited()
             except NotAuthorized:
                 wrong_userdata_handler(uid)
 
