@@ -56,7 +56,8 @@ class RegistrationEvaluator:
             for uid in scores:
                 scores[uid]['quests'] += 1
 
-        self.last_not_attended = acc.party.members.ids
+        members = acc.party.members
+        self.last_not_attended = [uid for uid in acc.party.members.ids if not members[uid]['preferences']['sleep']]
 
     def run_tick(self):
         """
@@ -70,7 +71,7 @@ class RegistrationEvaluator:
         with open('webhooksettings.json') as file:
             settings_ = json.load(file)
         with JSONFileData('QuestAcceptScore.json', indent=' ') as scores:
-            # raise missed counters
+            # get current state
             states = acc.party['quest']['members']
 
             # remove users without membership
@@ -79,18 +80,19 @@ class RegistrationEvaluator:
                     del scores[uid]
 
             for uid in self.last_not_attended:
+                # raise counters
                 if states.get(uid, False):
                     scores[uid]['participations'] += 1
                 else:
                     if remaining_ticks != settings_['max ticks']:
                         scores[uid]['ticks'] += 1
+
+                # calculate scores
                 if scores[uid]['participations']:
                     scores[uid]['average_ticks_taken'] = scores[uid]['ticks'] / scores[uid]['participations']
-                else:
-                    scores[uid]['average_ticks_taken'] = 0
-                if scores[uid]['participations']:
                     scores[uid]['not_attend_prob'] = 1 - (1 / (scores[uid]['average_ticks_taken'] + 1))
                 else:
+                    scores[uid]['average_ticks_taken'] = 0
                     scores[uid]['not_attend_prob'] = [0.5, 1][0 < scores[uid]['ticks']]
 
             if acc.party['quest']['active']:
