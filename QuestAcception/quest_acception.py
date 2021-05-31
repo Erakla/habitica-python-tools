@@ -2,7 +2,7 @@ from flask import request
 from HabiticaAPI import Client, Exceptions
 
 """
-This file is part of a modularized web server. It provides the required paths and associated functions for the respective project.
+This file is part of a modularized web server. It provides the required paths and associated functions for the respective project
 """
 
 # WebhookService
